@@ -3,18 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc --noEmit",
     "test": "node --test test/"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.27.0",
     "mysql2": "^3.11.0",
+    "opusscript": "0.0.8",
     "pino": "^9.7.0"
   },
   "devDependencies": {
-    "typescript": "~5.9.3",
-    "@types/node": "^24.0.0"
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3"
   }
 }
