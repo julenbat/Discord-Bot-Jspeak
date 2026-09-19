@@ -7,6 +7,11 @@ services:
     env_file: .env
     environment:
       TZ: Europe/Madrid
+      # environment pisa a env_file: el .env local puede apuntar MYSQL_HOST
+      # a donde le convenga a quien lo edite para pruebas desde el host: aquí,
+      # dentro de la red de compose, el nombre resoluble es siempre el del
+      # servicio, "db".
+      MYSQL_HOST: db
     depends_on:
       db:
         condition: service_healthy
