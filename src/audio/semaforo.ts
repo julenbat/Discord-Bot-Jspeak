@@ -3,17 +3,17 @@
 export class Semaforo {
   #enUso = 0;
   #cola: Array<() => void> = [];
-  private limite: number;
+  readonly #limite: number;
 
   constructor(limite: number) {
-    this.limite = limite;
+    this.#limite = limite;
   }
 
   enUso(): number { return this.#enUso; }
   esperando(): number { return this.#cola.length; }
 
   async adquirir(): Promise<() => void> {
-    if (this.#enUso < this.limite) this.#enUso++;
+    if (this.#enUso < this.#limite) this.#enUso++;
     else await new Promise<void>((r) => this.#cola.push(r));
     let liberado = false;
     return () => {
