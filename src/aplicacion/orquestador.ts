@@ -138,6 +138,14 @@ export class Orquestador {
 
     // 7 — C1 al encolar (rechazo barato; se vuelve a validar antes de sonar).
     // Primera lectura en vivo del estado de voz; la segunda la hace el bombeo.
+    //
+    // ANTES de evaluar hay que dejar que el cerrojo del guild se enfríe: el
+    // `finally` del bucle (paso 12) solo MARCA el instante en que la cola se
+    // quedó vacía, y sin nadie hablando ya no vuelve a pasar por allí nunca
+    // más. Si no se barriera aquí, el primero que hablase se quedaría con el
+    // canal del guild PARA SIEMPRE y cualquier otro usuario en otro canal
+    // comería 'canal_ocupado' hasta el reinicio del bot.
+    this.#guardian.liberarSiOcioso(m.guildId, this.#cola.vacia(m.guildId));
     const estadoVoz = m.estadoVoz();
     const veredicto = this.#guardian.evaluar(m.guildId, m.userId, estadoVoz);
     if (!veredicto.ok) {

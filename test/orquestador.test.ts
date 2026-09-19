@@ -179,3 +179,29 @@ test('kill switch del operador: el mensaje ni se mira', async () => {
   assert.equal(dobles.locuciones.length, 0);
   assert.equal(dobles.eventosAbiertos.length, 0);
 });
+
+// Regresión: el cerrojo de canal del guild se quedaba puesto de por vida.
+// El `finally` del bucle solo MARCA el inicio del ocio; con nadie hablando ya
+// no vuelve a ejecutarse, así que sin un barrido en el paso 7 el segundo
+// usuario comía 'canal_ocupado' para siempre.
+test('el cerrojo del guild se libera tras 10 s de silencio: otro usuario en otro canal sí suena', async () => {
+  const { orq, dobles, servicios } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla en el canal uno.' }));
+  assert.equal(dobles.locuciones.length, 1);           // A ocupa c1
+  assert.equal(servicios.cola.vacia('g'), true);       // y deja la cola vacía
+
+  // Segundo usuario autorizado y activo, en OTRO canal de voz del mismo guild.
+  await servicios.autorizaciones.autorizar('g', 'u2', 'admin');
+  await orq.activarSesion('g', 'u2');
+  dobles.reloj.avanzar(11_000);                        // > los 10 s de ocio del guardián
+
+  await orq.procesarMensaje(dobles.mensaje({
+    mensajeId: '2', userId: 'u2', nombreUsuario: 'Bea',
+    contenido: 'Bea habla en el canal dos.',
+    estadoVoz: { canalId: 'c2', ensordecido: false },
+  }));
+  assert.equal(dobles.locuciones.length, 2);           // el cerrojo se soltó: suena
+  assert.equal(dobles.eventosCerrados.at(-1)!.estado, 'reproducido');
+  assert.equal(servicios.guardian.canalOcupado('g'), 'c2'); // y ahora lo ocupa Bea
+});
