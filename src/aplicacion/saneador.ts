@@ -13,7 +13,11 @@ export function contarPalabras(texto: string): number {
   return texto.split(/\s+/).filter(Boolean).length;
 }
 
-// Caracteres de control C0 (U+0000-U+001F), marcas de ancho cero / bidi
+// Caracteres de control C0 (U+0000-U+001F) MENOS los cinco que son espacio
+// en blanco de verdad (\t \n \v \f \r, o sea U+0009-U+000D): esos NO se
+// borran, porque borrarlos pega las palabras de un mensaje multilínea
+// ("hola\nmundo" → "holamundo"). Se dejan pasar y el colapso final de
+// `\s+` a un espacio los normaliza. Marcas de ancho cero / bidi
 // (U+200B-U+200F: ZERO WIDTH SPACE, ZERO WIDTH NON-JOINER, ZERO WIDTH
 // JOINER, LEFT-TO-RIGHT MARK, RIGHT-TO-LEFT MARK) y overrides de embebido
 // RTL/LTR (U+202A-U+202E: LRE, RLE, PDF, LRO, RLO). Ninguno debe locutarse
@@ -23,10 +27,10 @@ export function contarPalabras(texto: string): number {
 // caracteres de control invisibles (incluido un byte NUL) pegados entre
 // los corchetes -- se corrompieron al copiarla. Decodificando los bytes
 // UTF-8 tal cual quedaron en el brief (0x00, 0x1F, U+200B, U+200F, U+202A,
-// U+202E como limites de rango) se reconstruyen exactamente los tres rangos
+// U+202E como limites de rango) se reconstruyen exactamente los rangos
 // de abajo, que ademas coinciden con la descripcion textual del pipeline
 // en ESPECIFICACION.md: "control/ancho-cero/RTL fuera".
-const CONTROL_INVISIBLES_RTL = /[\u0000-\u001F\u200B-\u200F\u202A-\u202E]/gu;
+const CONTROL_INVISIBLES_RTL = /[\u0000-\u0008\u000E-\u001F\u200B-\u200F\u202A-\u202E]/gu;
 
 // Pipeline de saneado con ORDEN FIJO (ver ESPECIFICACION.md §3.4): los
 // bloques de código pueden contener menciones y markdown falsos, así que

@@ -17,6 +17,8 @@ const casos: Array<[string, string, string | null]> = [
   ['repeticiones colapsadas a 3', 'jaaaaaaaja holaaaaa', 'jaaaja holaaa'],
   ['vacío tras sanear → null', '😂😂😂', null],
   ['solo un bloque de código → null', '```\nnada\n```', null],
+  ['multilínea: el salto de línea separa palabras, no las pega', 'hola\nmundo', 'hola mundo'],
+  ['tabulador: separa palabras, no las pega', 'uno\tdos\ttres', 'uno dos tres'],
 ];
 for (const [nombre, entrada, esperado] of casos) {
   test(nombre, () => assert.equal(sanear(entrada, res), esperado));
