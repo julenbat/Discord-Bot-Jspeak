@@ -105,8 +105,8 @@ try {
     killSwitch: () => config.ttsKillSwitch,
   });
 
-  // arrancarDiscord hace login y no resuelve hasta ClientReady (o hasta que
-  // login rechaza, p.ej. TokenInvalid): un fallo aquí cae al catch de abajo.
+  // arrancarDiscord registra los handlers y hace login; si el token es
+  // inválido, client.login() rechaza y el error cae al catch de abajo.
   client = await arrancarDiscord({ config, log, orquestador, autorizaciones, tts, altavoz });
   log.info('bot arrancado y a la espera de eventos');
 } catch (err) {
