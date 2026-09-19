@@ -138,6 +138,18 @@ export class Altavoz {
     e.bytesLocucion = 0;
   }
 
+  // El apagado ordenado (SIGTERM de `docker compose stop`) tiene que pasar
+  // por aquí: desconectar() es lo ÚNICO que emite las 5 tramas de silencio,
+  // hace el player.stop(true) que dispara el .delete() del encoder de
+  // opusscript y destruye la conexión (ESPECIFICACION §5, fila Apagado).
+  // Recorre una COPIA de las claves porque desconectar() borra del Map, y va
+  // en paralelo para no sumar los 120 ms de cada guild contra el tope duro de
+  // 8 s de main.ts. Cubre también los guilds con conexión pero sin sesión
+  // viva en el orquestador, que de otro modo se quedarían dentro del canal.
+  async desconectarTodos(): Promise<void> {
+    await Promise.all([...this.#porGuild.keys()].map((guildId) => this.desconectar(guildId)));
+  }
+
   async desconectar(guildId: string): Promise<void> {
     const e = this.#porGuild.get(guildId);
     if (!e) return;

@@ -172,6 +172,22 @@ test('apagar: aborta lo que sonaba y deja de aceptar mensajes', async () => {
   assert.equal(dobles.locuciones.length, 1);
 });
 
+// Regresión: Altavoz.desconectar() no se llamaba NUNCA en producción, así
+// que un `docker compose stop` no emitía las 5 tramas de silencio, no hacía
+// el player.stop(true) que libera el encoder de opusscript y no destruía la
+// conexión: el bot se quedaba tieso dentro del canal hasta que Discord lo
+// echaba por timeout.
+test('apagar: además de abortar, saca al bot de los canales de voz', async () => {
+  const { orq, dobles } = crearMundo({ locutorLento: true });
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Frase cortada por el apagado.' }));
+  assert.equal(dobles.desconexionesAltavoz, 0);   // en caliente no se desconecta nada
+  await orq.apagar();
+  assert.equal(dobles.desconexionesAltavoz, 1);
+  await orq.apagar();                             // idempotente: no desconecta dos veces
+  assert.equal(dobles.desconexionesAltavoz, 1);
+});
+
 test('kill switch del operador: el mensaje ni se mira', async () => {
   const { orq, dobles } = crearMundo({ killSwitch: true });
   await orq.activarSesion('g', 'u');

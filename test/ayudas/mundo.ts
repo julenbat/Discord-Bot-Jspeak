@@ -148,8 +148,15 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
     },
   };
 
-  // Altavoz: no-op; lo que importa del corte se observa en los eventos.
-  const altavoz = { cortar: () => {} };
+  // Altavoz: no-op; lo que importa del corte se observa en los eventos. Lo
+  // único que se cuenta es desconectarTodos(), que es la salida real del bot
+  // de los canales de voz en el apagado (5 tramas de silencio + stop(true) +
+  // destroy) y no deja rastro en ningún evento de BD.
+  let desconexionesAltavoz = 0;
+  const altavoz = {
+    cortar: () => {},
+    desconectarTodos: async () => { desconexionesAltavoz++; },
+  };
 
   // UNIQUE(mensaje_id) del esquema real: la segunda apertura del mismo id
   // devuelve 'duplicado' (pero el intento se registra, como lo registraría
@@ -214,6 +221,7 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
       locuciones, eventosAbiertos, eventosCerrados, avisos, reacciones, reloj,
       // getter: el contador vive en el cierre y el test lo lee al final.
       get señalesAbortadas() { return señalesAbortadas; },
+      get desconexionesAltavoz() { return desconexionesAltavoz; },
     },
   };
 }

@@ -22,10 +22,12 @@ const EMOJI_COLA_LLENA = '🚫';
 export interface PuertoLocutor {
   locutar(guildId: string, texto: string, voz: string, señal: AbortSignal): Promise<ResultadoLocucion>;
 }
-// Del Altavoz solo se usa cortar(): conectar lo hace la presentación, que es
-// quien tiene el objeto canal de discord.js (ver `MensajeEntrante.conectarVoz`).
+// Del Altavoz se usan cortar() (por locución) y desconectarTodos() (apagado):
+// conectar lo hace la presentación, que es quien tiene el objeto canal de
+// discord.js (ver `MensajeEntrante.conectarVoz`).
 export interface PuertoAltavoz {
   cortar(guildId: string): void;
+  desconectarTodos(): Promise<void>;
 }
 
 export interface MensajeEntrante {
@@ -237,8 +239,20 @@ export class Orquestador {
       pendientes.push(...this.#pararAudio(guildId, userId, 'apagado'));
     }
     await this.#cerrarTodas(pendientes);
+    // Y AHORA el audio de verdad: cortar() solo vacía el tubo, deja el player
+    // vivo y al bot dentro del canal. Las 5 tramas de silencio, el
+    // player.stop(true) que libera el encoder de opusscript y el
+    // conexion.destroy() solo salen de aquí (ESPECIFICACION §5, fila
+    // Apagado). Va por guild y no por sesión: un guild con conexión abierta y
+    // sin sesión viva también tiene que salirse del canal. Si fallara, el
+    // apagado sigue: quedarse sin hacer client.destroy()/pool.end() es peor.
+    try {
+      await this.#altavoz.desconectarTodos();
+    } catch (err) {
+      this.#log.warn({ err: (err as Error).message }, 'no se pudo desconectar el altavoz al apagar');
+    }
     this.#log.info({ locucionesAbortadas: pendientes.length },
-      'orquestador apagado: síntesis abortada y colas vacías');
+      'orquestador apagado: síntesis abortada, colas vacías y canales de voz abandonados');
   }
 
   // ───────────────────────── bombeo (paso 11) ─────────────────────────
