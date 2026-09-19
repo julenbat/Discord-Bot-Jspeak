@@ -1,5 +1,5 @@
 import {
-  Events, MessageFlags,
+  ChannelType, Events, MessageFlags, PermissionFlagsBits,
   type Client, type Message, type Interaction, type ChatInputCommandInteraction,
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
@@ -176,6 +176,25 @@ async function alRecibirMensaje(message: Message, deps: DepsDiscord): Promise<vo
     conectarVoz: async () => {
       const canal = guild.voiceStates.cache.get(userId)?.channel;
       if (!canal) throw new Error('el usuario ya no está en un canal de voz');
+      // Validación previa de tipo / aforo / permisos (ESPECIFICACION §3.6).
+      // Sin ella, un canal de escenario, lleno o sin Connect/Speak se paga a
+      // 20 s de `entersState(Ready)` POR LOCUCIÓN antes de fallar. El
+      // Orquestador ya trata este throw como fallo de esa locución: cierra la
+      // fila, sigue con la cola y no toca el breaker (entrar al canal no es
+      // culpa del proveedor).
+      if (canal.type !== ChannelType.GuildVoice) {
+        throw new Error(`el canal ${canal.id} no es un canal de voz normal (escenario: rechazado en v1)`);
+      }
+      const yo = guild.members.me;
+      if (yo === null) throw new Error('el bot no figura como miembro de este servidor');
+      // El aforo no aplica si el bot YA está dentro: seguir hablando en un
+      // canal que se ha llenado por detrás es legal.
+      if (canal.userLimit > 0 && canal.members.size >= canal.userLimit && !canal.members.has(yo.id)) {
+        throw new Error(`el canal ${canal.id} está lleno (${canal.members.size}/${canal.userLimit})`);
+      }
+      if (!canal.permissionsFor(yo)?.has([PermissionFlagsBits.Connect, PermissionFlagsBits.Speak])) {
+        throw new Error(`sin permisos de Connect/Speak en el canal ${canal.id}`);
+      }
       await deps.altavoz.conectar(canal);
     },
     resolutores,
