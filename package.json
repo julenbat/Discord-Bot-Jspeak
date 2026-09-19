@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc --noEmit",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "deploy-commands": "node scripts/desplegar-comandos.ts"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
