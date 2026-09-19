@@ -1,0 +1,20 @@
+{
+  "name": "albas-discord-tts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0",
+    "pino": "^9.7.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "@types/node": "^24.0.0"
+  }
+}
