@@ -30,7 +30,12 @@ export interface PuertoAltavoz {
 
 export interface MensajeEntrante {
   mensajeId: string; guildId: string; userId: string; nombreUsuario: string;
-  contenido: string; estadoVoz: EstadoVoz;
+  contenido: string;
+  // C1 exige leer el estado de voz EN VIVO, nunca de una copia: por eso es
+  // una función y no un valor. La presentación la resuelve contra el
+  // VoiceState vivo del caché de discord.js en CADA llamada, y el pipeline la
+  // invoca dos veces: al encolar (paso 7) y justo antes de locutar (paso 11).
+  estadoVoz(): EstadoVoz;
   // La presentación entrega funciones, no objetos de discord.js: la capa de
   // aplicación no importa discord.js.
   responder(texto: string, autoborradoMs?: number): Promise<void>;
@@ -127,14 +132,16 @@ export class Orquestador {
     const voz = this.#autorizaciones.vozDe(m.guildId, m.userId);
     const texto = sanear(m.contenido, m.resolutores);
     if (texto === null) {
-      await this.#abrirDescarte(m, '', 'texto_vacio', voz);
+      await this.#abrirDescarte(m, m.estadoVoz().canalId, '', 'texto_vacio', voz);
       return;
     }
 
     // 7 — C1 al encolar (rechazo barato; se vuelve a validar antes de sonar).
-    const veredicto = this.#guardian.evaluar(m.guildId, m.userId, m.estadoVoz);
+    // Primera lectura en vivo del estado de voz; la segunda la hace el bombeo.
+    const estadoVoz = m.estadoVoz();
+    const veredicto = this.#guardian.evaluar(m.guildId, m.userId, estadoVoz);
     if (!veredicto.ok) {
-      await this.#abrirDescarte(m, texto, veredicto.motivo, voz);
+      await this.#abrirDescarte(m, estadoVoz.canalId, texto, veredicto.motivo, voz);
       await this.#avisarSiToca(m, sesion, veredicto.motivo, this.#textoDeVeredicto(m, veredicto.motivo));
       return;
     }
@@ -149,7 +156,7 @@ export class Orquestador {
       // ColaLocuciones no expone su límite; lo que de verdad le interesa al
       // usuario es cuánto tiene pendiente, que es el número que se le da.
       const pendientes = this.#cola.palabrasPendientes(m.guildId, m.userId);
-      await this.#abrirDescarte(m, texto, 'cola_llena', voz);
+      await this.#abrirDescarte(m, estadoVoz.canalId, texto, 'cola_llena', voz);
       await this.#reaccionar(m, EMOJI_COLA_LLENA);
       await this.#avisarSiToca(m, sesion, 'cola_llena', plantillas.colaLlena(pendientes));
       return;
@@ -270,9 +277,11 @@ export class Orquestador {
   async #locutarUna(l: Locucion, ctx: MensajeEntrante, k: string): Promise<boolean> {
     const sesion = this.#sesiones.buscar(l.guildId, l.userId);
     // C1 OTRA VEZ, justo antes de reproducir: con hasta 80 s de cola, lo que
-    // se validó al encolar no garantiza nada. Y el epoch: una locución de una
-    // sesión ya muerta no suena.
-    const veredicto = this.#guardian.evaluar(l.guildId, l.userId, ctx.estadoVoz);
+    // se validó al encolar no garantiza nada. Esta llamada a `estadoVoz()` es
+    // la lectura EN VIVO que exige la spec (el usuario ha podido salirse del
+    // canal o ensordecerse mientras su mensaje esperaba turno). Y el epoch:
+    // una locución de una sesión ya muerta no suena.
+    const veredicto = this.#guardian.evaluar(l.guildId, l.userId, ctx.estadoVoz());
     if (sesion === null || sesion.epoch !== l.epoch || !veredicto.ok) {
       await this.#cerrar(l, { estado: 'abortado', costeOrigen: 'estimado' });
       return true;
@@ -434,10 +443,11 @@ export class Orquestador {
     return plantillas.canalOcupado((canalId && m.resolutores.nombreCanal(canalId)) || 'otro canal');
   }
 
-  async #abrirDescarte(m: MensajeEntrante, textoSaneado: string, motivo: string, voz: string): Promise<void> {
+  async #abrirDescarte(m: MensajeEntrante, canalVozId: string | null,
+      textoSaneado: string, motivo: string, voz: string): Promise<void> {
     await this.#abrir({
       mensajeId: m.mensajeId, guildId: m.guildId, userId: m.userId,
-      canalVozId: m.estadoVoz.canalId, estado: 'descartado', motivoDescarte: motivo,
+      canalVozId, estado: 'descartado', motivoDescarte: motivo,
       textoOriginal: m.contenido, textoSaneado, caracteres: textoSaneado.length, voz,
     });
   }

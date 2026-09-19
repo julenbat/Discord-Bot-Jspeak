@@ -89,8 +89,24 @@ test('circuit breaker: 3 fallos seguidos → 30 s sin sintetizar en el guild + u
   assert.equal(dobles.locuciones.length, 4);
 });
 
-// ── Añadidos a los nueve del brief: el resto de la API pública se quedaba
-// sin una sola línea de cobertura, y es la que corre con SIGTERM de por medio.
+// ── Añadidos a los nueve del brief.
+
+test('C1 en vivo: si se sale del canal entre encolar y sonar, no se locuta', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  // procesarMensaje corre sin ceder el control hasta el INSERT del paso 9,
+  // o sea: ya ha leído C1 (en el canal) y ya ha encolado. Aquí es donde el
+  // usuario se sale del canal de voz.
+  const enVuelo = orq.procesarMensaje(dobles.mensaje({ contenido: 'Se sale del canal antes de sonar.' }));
+  dobles.fijarEstadoVoz({ canalId: null, ensordecido: false });
+  await enVuelo;
+  assert.equal(dobles.locuciones.length, 0);                    // la relectura viva lo caza
+  assert.equal(dobles.eventosAbiertos[0]!.estado, 'encolado');  // llegó a encolarse…
+  assert.equal(dobles.eventosCerrados[0]!.estado, 'abortado');  // …y murió en la revalidación
+});
+
+// El resto de la API pública se quedaba sin una sola línea de cobertura,
+// y es la que corre con SIGTERM de por medio.
 
 test('apagar: aborta lo que sonaba y deja de aceptar mensajes', async () => {
   const { orq, dobles } = crearMundo({ locutorLento: true });

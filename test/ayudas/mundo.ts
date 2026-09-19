@@ -4,7 +4,7 @@
 // espía SOLO en los bordes caros: locutor, altavoz y repo de eventos.
 import { ServicioSesiones } from '../../src/aplicacion/sesiones.ts';
 import { ServicioAutorizaciones } from '../../src/aplicacion/autorizaciones.ts';
-import { GuardianVoz } from '../../src/aplicacion/guardian.ts';
+import { GuardianVoz, type EstadoVoz } from '../../src/aplicacion/guardian.ts';
 import { ColaLocuciones } from '../../src/aplicacion/cola-locuciones.ts';
 import { Orquestador, type MensajeEntrante } from '../../src/aplicacion/orquestador.ts';
 import type {
@@ -21,6 +21,11 @@ export interface OpcionesMundo {
   locutorFalla?: boolean;    // locutar rechaza siempre
   killSwitch?: boolean;      // por defecto false
 }
+
+// El estado de voz se sobrescribe como VALOR aunque el puerto lo exponga
+// como función: el test dice "este mensaje se escribió desde este sitio".
+export type SobrescriturasMensaje =
+  Partial<Omit<MensajeEntrante, 'estadoVoz'>> & { estadoVoz?: EstadoVoz };
 
 export interface LocucionEspiada { guildId: string; texto: string; voz: string }
 export interface CierreEspiado extends CierreEventoTts { mensajeId: string }
@@ -160,24 +165,37 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
     reloj, log, config, killSwitch: () => opciones.killSwitch === true,
   });
 
+  // Estado de voz del mundo: lo que la presentación real leería del caché
+  // vivo de discord.js. `estadoVoz()` lo consulta en CADA llamada, así que
+  // cambiarlo a media faena (fijarEstadoVoz) es exactamente "el usuario se
+  // sale del canal mientras su mensaje espera turno".
+  let estadoVozMundo: EstadoVoz = { canalId: 'c1', ensordecido: false };
+  const fijarEstadoVoz = (estado: EstadoVoz) => { estadoVozMundo = estado; };
+
   let siguienteId = 0;
-  const mensaje = (overrides: Partial<MensajeEntrante> = {}): MensajeEntrante => ({
-    mensajeId: String(++siguienteId),
-    guildId: GUILD, userId: USUARIO, nombreUsuario: 'Alba',
-    contenido: 'Un mensaje cualquiera del test.',
-    estadoVoz: { canalId: 'c1', ensordecido: false },
-    responder: async (texto: string) => { avisos.push(texto); },
-    reaccionar: async (emoji: string) => { reacciones.push(emoji); },
-    conectarVoz: async () => {},
-    resolutores: { nombreUsuario: () => null, nombreCanal: () => null },
-    ...overrides,
-  });
+  const mensaje = (overrides: SobrescriturasMensaje = {}): MensajeEntrante => {
+    // El override llega como VALOR (así lo escriben los tests) y se expone
+    // como función fija; sin override, el mensaje lee el mundo en vivo.
+    const { estadoVoz: fijo, ...resto } = overrides;
+    return {
+      mensajeId: String(++siguienteId),
+      guildId: GUILD, userId: USUARIO, nombreUsuario: 'Alba',
+      contenido: 'Un mensaje cualquiera del test.',
+      estadoVoz: () => fijo ?? estadoVozMundo,
+      responder: async (texto: string) => { avisos.push(texto); },
+      reaccionar: async (emoji: string) => { reacciones.push(emoji); },
+      conectarVoz: async () => {},
+      resolutores: { nombreUsuario: () => null, nombreCanal: () => null },
+      ...resto,
+    };
+  };
 
   return {
     orq,
     servicios: { autorizaciones, sesiones, guardian, cola },
     dobles: {
-      mensaje, locuciones, eventosAbiertos, eventosCerrados, avisos, reacciones, reloj,
+      mensaje, fijarEstadoVoz,
+      locuciones, eventosAbiertos, eventosCerrados, avisos, reacciones, reloj,
       // getter: el contador vive en el cierre y el test lo lee al final.
       get señalesAbortadas() { return señalesAbortadas; },
     },
