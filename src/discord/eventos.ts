@@ -44,6 +44,15 @@ export async function arrancarDiscord(deps: DepsDiscord): Promise<Client> {
   const { config, log } = deps;
   const client = crearCliente();
 
+  // ESPECIFICACION §5, fila Intents: "cierre 4014 → log FATAL, nunca fallo
+  // mudo". Sin estos dos listeners, un MessageContent sin activar en el
+  // portal cierra el shard con 4014 (DisallowedIntents) y discord.js deja el
+  // proceso VIVO y offline, sin una sola línea en el log: el bot "arranca
+  // bien" y no responde a nada. Además, un EventEmitter sin listener de
+  // 'error' relanza el error como excepción no capturada.
+  client.on(Events.ShardError, (err, shardId) => { alFallarElGateway(err, log, shardId); });
+  client.on(Events.Error, (err) => { alFallarElGateway(err, log); });
+
   // Caché en memoria del catálogo de voces (TTL 6 h), relleno perezoso con la
   // primera llamada (voice list / voice set / autocompletado). Vive en el
   // cierre de arrancarDiscord, no a nivel de módulo: cada Client tiene su
@@ -89,6 +98,22 @@ export async function arrancarDiscord(deps: DepsDiscord): Promise<Client> {
 
   await client.login(config.discordToken);
   return client;
+}
+
+// El gateway se ha roto de una forma de la que discord.js NO se recupera
+// solo: se grita en FATAL y se sale con 1 para que el `restart:
+// unless-stopped` del compose lo reintente (y para que el operador lo vea en
+// `docker compose logs`, en vez de un contenedor sano y un bot mudo).
+function alFallarElGateway(err: Error, log: Logger, shardId?: number): never {
+  const mensaje = err?.message ?? String(err);
+  // 4014 = DisallowedIntents. El mensaje de discord.js es literalmente "Used
+  // disallowed intents"; la causa real, el 99 % de las veces, es el toggle
+  // de Message Content sin activar.
+  const pista = /disallowed intents|4014/i.test(mensaje)
+    ? ' — activa Message Content Intent en el portal de Discord (Bot → Privileged Gateway Intents)'
+    : '';
+  log.fatal({ err: mensaje, shardId }, `el gateway de Discord falló: ${mensaje}${pista}`);
+  process.exit(1);
 }
 
 // ───────────────────────── Events.MessageCreate ─────────────────────────
