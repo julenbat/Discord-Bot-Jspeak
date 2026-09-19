@@ -52,7 +52,9 @@ async function apagar(señal: string): Promise<void> {
   abortoArranque.abort();
   const tope = setTimeout(() => process.exit(1), 8_000);
   // Orden: dejar de escuchar eventos → orquestador.apagar() (aborta síntesis,
-  // vacía colas, corta el altavoz de cada sesión) → client.destroy() →
+  // vacía colas, corta el altavoz de cada sesión y luego desconecta de todos
+  // los canales de voz: 5 tramas de silencio + stop(true) que libera el
+  // encoder de opusscript + destroy()) → client.destroy() →
   // pool.end(). MessageCreate e InteractionCreate son las dos puertas por las
   // que entra trabajo nuevo (mensajes de canal de voz y /jspeak); quitarlas
   // ANTES de orquestador.apagar() evita que una interacción en vuelo cree una
