@@ -12,7 +12,8 @@ import type {
   RepoSesiones, RepoTtsEventos, Sesion,
 } from '../../src/aplicacion/puertos.ts';
 import type { ResultadoLocucion } from '../../src/audio/locutor.ts';
-import { crearLogger } from '../../src/logger.ts';
+import { pino } from 'pino';
+import type { Logger } from '../../src/logger.ts';
 import type { Config } from '../../src/config.ts';
 
 export interface OpcionesMundo {
@@ -20,6 +21,7 @@ export interface OpcionesMundo {
   locutorLento?: boolean;    // locutar devuelve una promesa que no resuelve
   locutorFalla?: boolean;    // locutar rechaza siempre
   killSwitch?: boolean;      // por defecto false
+  modeloDevuelto?: string;   // lo que el proveedor dice haber usado
 }
 
 // El estado de voz se sobrescribe como VALOR aunque el puerto lo exponga
@@ -42,6 +44,22 @@ const LIMITE_PALABRAS_TEST = 100;
 
 function clave(guildId: string, userId: string): string {
   return `${guildId}:${userId}`;
+}
+
+// Logger de verdad (pino, como en producción) con el destino redirigido a
+// un array: el formato EXACTO de la línea del paso 10 es un mandato de la
+// spec y hay que poder asertarlo. Con MUNDO_LOG_LEVEL puesto, además se ve
+// por stdout: `MUNDO_LOG_LEVEL=info rtk node --test test/orquestador.test.ts`.
+function loggerCapturador(): { log: Logger; lineas: string[] } {
+  const lineas: string[] = [];
+  const destino = {
+    write: (linea: string) => {
+      const msg = (JSON.parse(linea) as { msg?: string }).msg;
+      if (msg !== undefined) lineas.push(msg);
+      if (process.env.MUNDO_LOG_LEVEL) process.stdout.write(linea);
+    },
+  };
+  return { log: pino({ level: process.env.MUNDO_LOG_LEVEL ?? 'info' }, destino), lineas };
 }
 
 function relojFalso(inicio = T0) {
@@ -106,9 +124,7 @@ function repoAutorizacionesFalso(reloj: { ahora(): number }, autorizado: boolean
 
 export function crearMundo(opciones: OpcionesMundo = {}) {
   const reloj = relojFalso();
-  // Mudo salvo que se quiera mirar el pipeline a ojo:
-  // `MUNDO_LOG_LEVEL=info rtk node --test test/orquestador.test.ts`.
-  const log = crearLogger(process.env.MUNDO_LOG_LEVEL ?? 'silent', 'UTC');
+  const { log, lineas: logs } = loggerCapturador();
   const config = configFalsa();
 
   const avisos: string[] = [];
@@ -127,7 +143,7 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
       if (opciones.locutorLento) return new Promise<ResultadoLocucion>(() => { /* jamás resuelve */ });
       return {
         estado: 'reproducido', msPrimerByte: 120, msAudio: 1_800,
-        caracteresProveedor: texto.length, modeloDevuelto: null,
+        caracteresProveedor: texto.length, modeloDevuelto: opciones.modeloDevuelto ?? null,
       };
     },
   };
@@ -194,7 +210,7 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
     orq,
     servicios: { autorizaciones, sesiones, guardian, cola },
     dobles: {
-      mensaje, fijarEstadoVoz,
+      mensaje, fijarEstadoVoz, logs,
       locuciones, eventosAbiertos, eventosCerrados, avisos, reacciones, reloj,
       // getter: el contador vive en el cierre y el test lo lee al final.
       get señalesAbortadas() { return señalesAbortadas; },

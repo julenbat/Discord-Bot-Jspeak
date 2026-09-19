@@ -298,14 +298,19 @@ export class Orquestador {
     try {
       await ctx.conectarVoz();
     } catch (err) {
+      if (this.#enCurso.get(k) !== l) return false;   // pararTodo ya cerró la fila
       this.#log.warn({ err: (err as Error).message, guildId: l.guildId, canalId: veredicto.canalId },
         'no se pudo entrar al canal de voz');
       await this.#cerrar(l, { estado: 'fallido', costeOrigen: 'estimado' });
       return true;
     }
+    // Entrar al canal es lento (hasta 20 s de `entersState`): pararTodo ha
+    // podido pasar por aquí mientras tanto, y ya abortó, vació la cola y
+    // cerró esta fila como 'abortado'. Seguir sería locutar DESPUÉS del corte.
+    if (this.#enCurso.get(k) !== l) return false;
     this.#guardian.ocupar(l.guildId, veredicto.canalId);
 
-    const señal = this.#controlador(k).signal;
+    const señal = this.#señalDe(l.guildId, l.userId);
     let resultado: ResultadoLocucion;
     try {
       resultado = await this.#locutor.locutar(l.guildId, l.texto, l.voz, señal);
@@ -417,13 +422,19 @@ export class Orquestador {
 
   // ───────────────────────── utilidades ─────────────────────────
 
-  #controlador(k: string): AbortController {
-    let c = this.#abortos.get(k);
-    if (c === undefined) {
-      c = new AbortController();      // sesión rescatada del barrido de arranque
-      this.#abortos.set(k, c);
-    }
-    return c;
+  // La creación perezosa existe para las sesiones rescatadas por el barrido de
+  // arranque, que nunca pasaron por activarSesion(). Lo que NO puede hacer es
+  // resucitar un controlador para una sesión que ya no existe: pararTodo borra
+  // el suyo al abortar, y devolver ahí uno nuevo «sin abortar» sería dar vía
+  // libre al audio que se acababa de cortar.
+  #señalDe(guildId: string, userId: string): AbortSignal {
+    const k = clave(guildId, userId);
+    const existente = this.#abortos.get(k);
+    if (existente !== undefined) return existente.signal;
+    if (this.#sesiones.buscar(guildId, userId) === null) return AbortSignal.abort();
+    const nuevo = new AbortController();
+    this.#abortos.set(k, nuevo);
+    return nuevo.signal;
   }
 
   // El id se recuerda solo cuando el mensaje se acepta de verdad: los

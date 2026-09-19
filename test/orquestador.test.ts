@@ -105,6 +105,59 @@ test('C1 en vivo: si se sale del canal entre encolar y sonar, no se locuta', asy
   assert.equal(dobles.eventosCerrados[0]!.estado, 'abortado');  // …y murió en la revalidación
 });
 
+test('el log del paso 10 sale con el formato EXACTO de la spec', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  // Con markup: lo que se loguea es el texto SANEADO, no el original.
+  await orq.procesarMensaje(dobles.mensaje({
+    contenido: '**Hola** mundo https://ejemplo.com',
+    resolutores: { nombreUsuario: () => null, nombreCanal: () => null },
+  }));
+  assert.ok(dobles.logs.includes('El usuario Alba <-> u : Ha generado el tts: Hola mundo enlace'),
+    `no está la línea esperada; capturadas: ${JSON.stringify(dobles.logs)}`);
+});
+
+test('coste estimado: caracteres locales x tarifa del modelo / 1e6', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  const contenido = 'Cuenta los caracteres de esta frase exacta.';
+  await orq.procesarMensaje(dobles.mensaje({ contenido }));
+  const cierre = dobles.eventosCerrados[0]!;
+  assert.equal(cierre.estado, 'reproducido');
+  assert.equal(cierre.modelo, 'inworld-tts-2');            // sin modeloDevuelto: el de config
+  assert.equal(cierre.tarifaUsdPorMillon, 25);             // copiada en la fila
+  assert.equal(cierre.costeUsd, (contenido.length * 25) / 1_000_000);
+  assert.equal(cierre.costeOrigen, 'estimado');            // Inworld no da precio jamás
+});
+
+test('coste: manda el modelo que devuelve el proveedor, con SU tarifa', async () => {
+  const { orq, dobles } = crearMundo({ modeloDevuelto: 'inworld-tts-2-flash' });
+  await orq.activarSesion('g', 'u');
+  const contenido = 'Otra frase para el modelo flash.';
+  await orq.procesarMensaje(dobles.mensaje({ contenido }));
+  const cierre = dobles.eventosCerrados[0]!;
+  assert.equal(cierre.modelo, 'inworld-tts-2-flash');
+  assert.equal(cierre.tarifaUsdPorMillon, 15);
+  assert.equal(cierre.costeUsd, (contenido.length * 15) / 1_000_000);
+});
+
+test('pararTodo durante conectarVoz: el mensaje NO suena tras el corte', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  let soltarConexion!: () => void;
+  const m = dobles.mensaje({
+    contenido: 'Cortada mientras entraba al canal.',
+    conectarVoz: () => new Promise<void>((resolver) => { soltarConexion = resolver; }),
+  });
+  await orq.procesarMensaje(m);              // devuelve con el bombeo DENTRO de conectarVoz
+  await orq.desactivarSesion('g', 'u');      // pararTodo: aborta, vacía y cierra la fila
+  soltarConexion();                          // la conexión llega tarde, ya no vale
+  await new Promise((r) => setImmediate(r)); // que el bombeo retome y se encuentre el corte
+  assert.equal(dobles.locuciones.length, 0);                    // no se locuta nada
+  assert.equal(dobles.eventosCerrados.length, 1);               // ni se cierra dos veces
+  assert.equal(dobles.eventosCerrados[0]!.estado, 'abortado');
+});
+
 // El resto de la API pública se quedaba sin una sola línea de cobertura,
 // y es la que corre con SIGTERM de por medio.
 
