@@ -53,36 +53,56 @@ export class Altavoz {
   async #conectarDeVerdad(canal: VoiceBasedChannel): Promise<void> {
     const guildId = canal.guild.id;
     await this.desconectar(guildId); // nunca dos conexiones al mismo guild
-    const conexion = joinVoiceChannel({
-      channelId: canal.id, guildId,
-      adapterCreator: canal.guild.voiceAdapterCreator,
-      selfDeaf: true,
-    });
+
+    // Nada de lo que se crea aquí entra en #porGuild hasta la ÚLTIMA línea, y
+    // #porGuild es el único sitio del que desconectar()/cortar() sacan sus
+    // referencias. Si `entersState(Ready, 20 s)` lanza (timeout, permisos,
+    // aforo, canal de escenario) y no se limpiara a mano, esa conexión se
+    // quedaría viva y sin dueño: un bot fantasma dentro del canal que nadie
+    // puede destruir hasta reiniciar el proceso. De ahí el try/catch.
+    let conexion: VoiceConnection | undefined;
     const player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 25 },
     });
-    conexion.subscribe(player);
+    try {
+      const con = joinVoiceChannel({
+        channelId: canal.id, guildId,
+        adapterCreator: canal.guild.voiceAdapterCreator,
+        selfDeaf: true,
+      });
+      conexion = con;
+      con.subscribe(player);
 
-    // Movido o expulsado: distinguir "me están cambiando de canal" (vuelve a
-    // Ready solo) de "me han echado" con una carrera corta; si es expulsión,
-    // limpiar y esperar al siguiente mensaje. Nunca volver por iniciativa propia.
-    conexion.on(VoiceConnectionStatus.Disconnected, async () => {
-      try {
-        await Promise.race([
-          entersState(conexion, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(conexion, VoiceConnectionStatus.Connecting, 5_000),
-        ]);
-      } catch {
-        this.#log.info({ guildId }, 'expulsado del canal de voz; limpiando');
-        void this.desconectar(guildId);
-      }
-    });
+      // Movido o expulsado: distinguir "me están cambiando de canal" (vuelve a
+      // Ready solo) de "me han echado" con una carrera corta; si es expulsión,
+      // limpiar y esperar al siguiente mensaje. Nunca volver por iniciativa propia.
+      con.on(VoiceConnectionStatus.Disconnected, async () => {
+        try {
+          await Promise.race([
+            entersState(con, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(con, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch {
+          this.#log.info({ guildId }, 'expulsado del canal de voz; limpiando');
+          void this.desconectar(guildId);
+        }
+      });
 
-    await entersState(conexion, VoiceConnectionStatus.Ready, 20_000);
+      await entersState(con, VoiceConnectionStatus.Ready, 20_000);
 
-    const tubo = new PassThrough({ highWaterMark: BYTES_TRAMA * 250 }); // ~5 s de colchón
-    player.play(createAudioResource(tubo, { inputType: StreamType.Raw }));
-    this.#porGuild.set(guildId, { conexion, player, tubo, canalId: canal.id, bytesLocucion: 0 });
+      const tubo = new PassThrough({ highWaterMark: BYTES_TRAMA * 250 }); // ~5 s de colchón
+      player.play(createAudioResource(tubo, { inputType: StreamType.Raw }));
+      this.#porGuild.set(guildId, { conexion: con, player, tubo, canalId: canal.id, bytesLocucion: 0 });
+    } catch (err) {
+      // stop(true) es lo único que dispara el .delete() del encoder de
+      // opusscript; destroy() saca al bot del canal. Ambos toleran mal que se
+      // les llame dos veces, así que van blindados.
+      try { player.stop(true); } catch { /* ya parado */ }
+      try { conexion?.destroy(); } catch { /* ya destruida */ }
+      this.#log.warn({ err: (err as Error).message, guildId, canalId: canal.id },
+        'no se pudo establecer la conexión de voz; conexión y player destruidos');
+      throw err;
+    }
   }
 
   empujar(guildId: string, pcm: Buffer): void {
