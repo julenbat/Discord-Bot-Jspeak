@@ -76,11 +76,12 @@ export class ServicioSesiones {
   async desactivar(guildId: string, userId: string): Promise<boolean> {
     // Se borra de memoria pase lo que pase en BD (mismo patrón que
     // ServicioAutorizaciones.revocar): una sesión que el orquestador ya dio
-    // por muerta no debe seguir viva en caché. El epoch queda "quemado":
-    // el próximo activar() mintará uno nuevo y más alto (#siguienteEpoch
-    // nunca retrocede), así que cualquier callback en vuelo con el epoch
-    // antiguo deja de reconocerse como vigente.
+    // por muerta no debe seguir viva en caché.
     this.#vivas.delete(clave(guildId, userId));
+    // "epoch++ incluido" del contrato: se quema aquí mismo (no se difiere al
+    // próximo activar()) para que el contador ya esté avanzado en cuanto
+    // pararTodo termina, aunque la sesión muerta ya no tenga epoch que exponer.
+    this.#siguienteEpoch++;
     return this.#repo.desactivar(guildId, userId);
   }
 
