@@ -63,7 +63,7 @@ Usuario autorizado                 Nuestro servidor                    Discord
 
 ## 2. Veredicto técnico: ¿el TTS se puede hacer solo con Node.js?
 
-**Sí.** Verificado sobre el código que ya corre en producción en `217.160.248.29` (§4).
+**Sí.** Verificado sobre el código que ya corre en producción en un servicio privado del autor (§4).
 
 El módulo de TTS de ese servicio son ~130 líneas que usan **únicamente `fetch` y `Buffer` nativos de
 Node** contra los endpoints HTTP de streaming del proveedor. Cero dependencias, cero binarios,
@@ -142,7 +142,7 @@ La regla es de una sola dirección: **las capas de arriba conocen a las de abajo
 
 ## 4. Herencia: el agente de voz de `ionos`
 
-En `217.160.248.29` (alias `ionos`, usuario `julen`) vive **`~/voice-agent`**: un agente conversacional
+En un servidor privado del autor vive **`voice-agent`**: un agente conversacional
 telefónico en producción — Asterisk → AudioSocket → Deepgram STT → OpenAI → Inworld TTS → llamada.
 Es un repo de Node sin dependencias nativas, y **resuelve ya casi todos los problemas difíciles** de
 este proyecto.
@@ -168,17 +168,8 @@ Qué se reaprovecha, y qué cambia:
    *también* la síntesis en curso. En el servicio hermano esto fue un bug real y está comentado en el
    código.
 
-### Cómo mirarlo
-
-```bash
-echo y | "C:/Program Files/PuTTY/plink.exe" -ssh julen@217.160.248.29 -pw '<pw en puttyConnections/ionos.cmd>' \
-  "cat ~/voice-agent/src/player.js"
-```
-
-Estado de la máquina a 2026-09-19: 2 vCPU, 8 GB de RAM, 47 GB libres, Docker 29.1.3, Node del host
-v20.20.2 (el servicio corre en contenedor con Node 22). Puertos ya ocupados: 22, 3478 (STUN/TURN),
-5001, 9099, 9092/9093 del agente de voz. **Hay sitio de sobra para este bot; elegir puertos que no
-choquen.**
+Ese repositorio es privado; las piezas reutilizables ya están portadas a TypeScript en `src/audio/`
+de este proyecto, con sus lecciones documentadas en los comentarios.
 
 ---
 

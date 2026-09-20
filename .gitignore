@@ -1,4 +1,22 @@
+# Dependencias
 node_modules/
+
+# Secretos y configuración local — jamás al repositorio
 .env
-*.log
+.env.*
+!.env.example
 docker-compose.override.yml
+
+# Logs y temporales
+*.log
+*.tmp
+
+# Artefactos de sesiones de desarrollo asistido
+.superpowers/
+.claude/
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
