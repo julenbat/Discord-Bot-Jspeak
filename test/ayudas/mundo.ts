@@ -148,14 +148,23 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
     },
   };
 
-  // Altavoz: no-op; lo que importa del corte se observa en los eventos. Lo
-  // único que se cuenta es desconectarTodos(), que es la salida real del bot
-  // de los canales de voz en el apagado (5 tramas de silencio + stop(true) +
-  // destroy) y no deja rastro en ningún evento de BD.
+  // Altavoz: no-op salvo en lo único que se observa desde fuera —dónde está
+  // el bot y cuándo sale—, porque salir del canal no deja rastro en ningún
+  // evento de BD. `canalActualId` se alimenta del `conectarVoz()` del mensaje
+  // (más abajo), igual que en producción: es la presentación quien mete al
+  // bot en el canal. Se cuentan por separado desconectarTodos() (apagado, de
+  // golpe y sin guild) y desconectar(guildId) (las tres salidas en caliente).
   let desconexionesAltavoz = 0;
+  const desconexionesGuild: string[] = [];
+  const canalesActuales = new Map<string, string>();
   const altavoz = {
     cortar: () => {},
-    desconectarTodos: async () => { desconexionesAltavoz++; },
+    canalActualId: (guildId: string) => canalesActuales.get(guildId) ?? null,
+    desconectar: async (guildId: string) => {
+      desconexionesGuild.push(guildId);
+      canalesActuales.delete(guildId);   // como el Altavoz real: ya no hay conexión
+    },
+    desconectarTodos: async () => { desconexionesAltavoz++; canalesActuales.clear(); },
   };
 
   // UNIQUE(mensaje_id) del esquema real: la segunda apertura del mismo id
@@ -200,14 +209,22 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
     // El override llega como VALOR (así lo escriben los tests) y se expone
     // como función fija; sin override, el mensaje lee el mundo en vivo.
     const { estadoVoz: fijo, ...resto } = overrides;
+    const guildId = resto.guildId ?? GUILD;
+    const leerEstadoVoz = () => fijo ?? estadoVozMundo;
     return {
       mensajeId: String(++siguienteId),
       guildId: GUILD, userId: USUARIO, nombreUsuario: 'Alba',
       contenido: 'Un mensaje cualquiera del test.',
-      estadoVoz: () => fijo ?? estadoVozMundo,
+      estadoVoz: leerEstadoVoz,
       responder: async (texto: string) => { avisos.push(texto); },
       reaccionar: async (emoji: string) => { reacciones.push(emoji); },
-      conectarVoz: async () => {},
+      // Entrar al canal es cosa de la presentación (es quien tiene el objeto
+      // canal de discord.js): aquí se limita a dejar constancia de dónde
+      // acaba el bot, que es lo que luego lee altavoz.canalActualId().
+      conectarVoz: async () => {
+        const canalId = leerEstadoVoz().canalId;
+        if (canalId !== null) canalesActuales.set(guildId, canalId);
+      },
       resolutores: { nombreUsuario: () => null, nombreCanal: () => null },
       ...resto,
     };
@@ -219,6 +236,11 @@ export function crearMundo(opciones: OpcionesMundo = {}) {
     dobles: {
       mensaje, fijarEstadoVoz, logs,
       locuciones, eventosAbiertos, eventosCerrados, avisos, reacciones, reloj,
+      // Dónde está el bot ahora mismo, según el mundo (null = fuera).
+      canalActual: (guildId = GUILD) => canalesActuales.get(guildId) ?? null,
+      // Un guildId por cada altavoz.desconectar(guildId): las tres salidas
+      // en caliente (usuario que se va, última sesión desactivada, inactividad).
+      desconexionesGuild,
       // getter: el contador vive en el cierre y el test lo lee al final.
       get señalesAbortadas() { return señalesAbortadas; },
       get desconexionesAltavoz() { return desconexionesAltavoz; },

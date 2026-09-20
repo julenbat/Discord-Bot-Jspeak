@@ -89,6 +89,13 @@ export class ServicioSesiones {
     return this.#vivas.get(clave(guildId, userId)) ?? null;
   }
 
+  // Todas las sesiones vivas de un guild. La necesita el paquete de salida
+  // del canal de voz: "¿queda alguien con TTS activo?" es una pregunta por
+  // guild, no por usuario, y buscar() solo sabe responder de uno en uno.
+  activasDe(guildId: string): SesionViva[] {
+    return [...this.#vivas.values()].filter((s) => s.guildId === guildId);
+  }
+
   tocaRecordatorio(s: SesionViva): boolean {
     return this.#reloj.ahora() - s.ultimoMensajeAceptadoMs > RECORDATORIO_MS;
   }

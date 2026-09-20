@@ -36,10 +36,13 @@ const log = crearLogger(config.logLevel, config.tz);
 const pool = crearPool(config.mysql);
 const abortoArranque = new AbortController();
 
+const TIC_INACTIVIDAD_MS = 60_000; // cada minuto se pregunta quién lleva 5 min de más en un canal
+
 // Se rellenan durante el arranque; apagar() los usa si ya existen (undefined
 // mientras seguimos esperando BD/migrando/validando Inworld).
 let orquestador: Orquestador | undefined;
 let client: Client | undefined;
+let ticInactividad: ReturnType<typeof setInterval> | undefined;
 
 let apagando = false;
 async function apagar(señal: string): Promise<void> {
@@ -61,6 +64,10 @@ async function apagar(señal: string): Promise<void> {
   // sesión nueva justo cuando se está vaciando todo lo demás.
   client?.removeAllListeners(Events.MessageCreate);
   client?.removeAllListeners(Events.InteractionCreate);
+  // El barrido de inactividad sobra a partir de aquí: orquestador.apagar()
+  // saca al bot de TODOS los canales de golpe, y un tic que llegara en medio
+  // solo podría estorbar (y mantener vivo el bucle de eventos).
+  if (ticInactividad) clearInterval(ticInactividad);
   if (orquestador) await orquestador.apagar();
   if (client) await client.destroy();
   await pool.end();
@@ -106,6 +113,20 @@ try {
     reloj: relojSistema, log, config,
     killSwitch: () => config.ttsKillSwitch,
   });
+
+  // El TIC de la salida por inactividad vive AQUÍ y solo aquí: la capa de
+  // aplicación no tiene un solo setTimeout/setInterval (todo su tiempo sale
+  // del Reloj inyectado, que es lo que la hace testeable sin esperar 5 min
+  // de reloj de pared). Cada minuto se le pregunta al orquestador qué guilds
+  // llevan más de 5 min con la conexión de voz abierta, la cola vacía y nadie
+  // locutando; él decide y sale. Un fallo del barrido no puede tumbar el
+  // proceso: se registra y al minuto siguiente se reintenta.
+  const orq = orquestador;
+  ticInactividad = setInterval(() => {
+    orq.barrerInactividad().catch((err) => {
+      log.warn({ err: (err as Error).message }, 'el barrido de inactividad de voz falló');
+    });
+  }, TIC_INACTIVIDAD_MS);
 
   // arrancarDiscord registra los handlers y hace login; si el token es
   // inválido, client.login() rechaza y el error cae al catch de abajo.

@@ -15,6 +15,7 @@ const AUTOBORRADO_MS = 60_000;  // lo que escribe el bot se borra solo
 const BREAKER_UMBRAL = 3;       // 3 fallos seguidos en el guild…
 const BREAKER_VEDA_MS = 30_000; // …y 30 s sin molestar al proveedor
 const EMOJI_COLA_LLENA = '🚫';
+const INACTIVIDAD_VOZ_MS = 5 * 60_000; // conexión viva + cola vacía + nadie locutando → fuera
 
 // Lo que el orquestador necesita del Locutor de src/audio (mismo patrón que
 // `SintetizadorTts`): una interfaz estructural permite el doble de test, que
@@ -22,11 +23,15 @@ const EMOJI_COLA_LLENA = '🚫';
 export interface PuertoLocutor {
   locutar(guildId: string, texto: string, voz: string, señal: AbortSignal): Promise<ResultadoLocucion>;
 }
-// Del Altavoz se usan cortar() (por locución) y desconectarTodos() (apagado):
-// conectar lo hace la presentación, que es quien tiene el objeto canal de
-// discord.js (ver `MensajeEntrante.conectarVoz`).
+// Del Altavoz se usan cortar() (por locución), desconectar(guildId) (las tres
+// salidas del canal en caliente), desconectarTodos() (apagado) y
+// canalActualId(guildId) (saber DÓNDE está el bot, que es la mitad de la
+// política de salida): conectar lo hace la presentación, que es quien tiene
+// el objeto canal de discord.js (ver `MensajeEntrante.conectarVoz`).
 export interface PuertoAltavoz {
   cortar(guildId: string): void;
+  canalActualId(guildId: string): string | null;
+  desconectar(guildId: string): Promise<void>;
   desconectarTodos(): Promise<void>;
 }
 
@@ -91,6 +96,10 @@ export class Orquestador {
   #bombeando = new Set<string>();                     // single-flight por sesión
   #enCurso = new Map<string, Locucion>();             // lo que está sonando por sesión
   #contextos = new Map<string, MensajeEntrante>();    // mensajeId → funciones de la presentación
+  // Salida C: última vez que la conexión de voz de un guild sirvió para algo
+  // (entrar al canal o terminar una locución), en ms del Reloj INYECTADO.
+  // Aquí no hay ni un setTimeout: el tic que consulta esto vive en main.ts.
+  #ultimaActividadVoz = new Map<string, number>();
 
   constructor(deps: DepsOrquestador) {
     this.#autorizaciones = deps.autorizaciones;
@@ -204,6 +213,14 @@ export class Orquestador {
     return resultado;
   }
 
+  // Los userId con sesión viva en el guild. Lo consume la presentación para
+  // resolver, contra el caché vivo de discord.js, si queda alguien con TTS
+  // activo dentro del canal que se acaba de dejar (salida A): ese cruce
+  // necesita los VoiceState, que la capa de aplicación no ve ni quiere ver.
+  sesionesActivasDe(guildId: string): string[] {
+    return this.#sesiones.activasDe(guildId).map((s) => s.userId);
+  }
+
   // pararTodo del contrato: abort → cortar → vaciar cola → epoch++ →
   // liberar cerrojo → filas terminales (ESPECIFICACION §5, fila Cancelación).
   async desactivarSesion(guildId: string, userId: string): Promise<boolean> {
@@ -211,7 +228,67 @@ export class Orquestador {
     const desactivada = await this.#sesiones.desactivar(guildId, userId); // epoch++
     this.#guardian.liberarSiOcioso(guildId, this.#cola.vacia(guildId));
     await this.#cerrarTodas(pendientes);
+    // SALIDA B: el último que apaga cierra la puerta. Sin ninguna sesión
+    // activa en el guild nadie puede volver a hacer sonar nada sin pasar
+    // antes por /jspeak enable, así que quedarse dentro del canal solo sirve
+    // para ocupar una conexión de voz y aparecer en la lista de miembros.
+    if (this.#sesiones.activasDe(guildId).length === 0) {
+      await this.#abandonarCanal(guildId, 'se desactivó la última sesión del guild');
+    }
     return desactivada;
+  }
+
+  // SALIDA A: alguien se ha cambiado (o se ha salido) de canal de voz.
+  //
+  // La presentación ya ha filtrado el ruido —cambio REAL de canal, nada de
+  // bots— y ya ha resuelto el único dato que la capa de aplicación no puede
+  // mirar: si queda algún OTRO usuario con sesión activa dentro del canal que
+  // se acaba de dejar (`quedanActivosEnElCanal`, cruce de sesionesActivasDe()
+  // con los VoiceState del caché de discord.js). Toda la POLÍTICA es de aquí.
+  //
+  // La sesión NO se toca: sigue activa a propósito. Si el usuario vuelve y
+  // escribe, la entrada perezosa del pipeline (paso 11 → conectarVoz) mete al
+  // bot otra vez sin obligarle a repetir /jspeak enable.
+  async abandonarCanalSiProcede(guildId: string, userId: string,
+      canalAnteriorId: string | null, quedanActivosEnElCanal: boolean): Promise<void> {
+    if (this.#apagando) return;
+    if (canalAnteriorId === null) return;                                 // acaba de ENTRAR a un canal
+    if (this.#sesiones.buscar(guildId, userId) === null) return;          // sin TTS activo: no es asunto suyo
+    if (this.#altavoz.canalActualId(guildId) !== canalAnteriorId) return; // el bot no estaba ahí
+    if (quedanActivosEnElCanal) return;                                   // queda audiencia con TTS
+
+    // Se va el último: lo que tuviera en vuelo ya no tiene a quién sonarle.
+    const pendientes = this.#pararAudio(guildId, userId, 'el usuario salió del canal');
+    this.#guardian.liberarSiOcioso(guildId, this.#cola.vacia(guildId));
+    await this.#cerrarTodas(pendientes);
+    await this.#abandonarCanal(guildId, 'el último usuario con tts activo salió del canal');
+  }
+
+  // SALIDA C: barrido de inactividad. El TIC lo da main.ts (composition
+  // root) cada minuto; aquí solo está la política, medida contra el Reloj
+  // inyectado. Se sale de los guilds con conexión viva, cola vacía (nada
+  // encolado y nada sonando) y más de 5 min sin que esa conexión sirva para
+  // nada. Cubre el hueco que dejan A y B: el usuario cierra Discord de golpe,
+  // se le cae la red o el `oldState.channelId` se pierde por un RESUME.
+  async barrerInactividad(): Promise<void> {
+    if (this.#apagando) return;
+    const ahora = this.#reloj.ahora();
+    for (const [guildId, desdeMs] of [...this.#ultimaActividadVoz]) {
+      // La conexión ya no existe (expulsión, salida A/B, apagado): la marca
+      // sobra. La próxima conectarVoz() la vuelve a poner.
+      if (this.#altavoz.canalActualId(guildId) === null) {
+        this.#ultimaActividadVoz.delete(guildId);
+        continue;
+      }
+      if (!this.#cola.vacia(guildId)) continue;          // hay trabajo o algo sonando
+      if (ahora - desdeMs <= INACTIVIDAD_VOZ_MS) continue;
+      // Si el bot se va del canal, el cerrojo del guild que lo ataba a ese
+      // canal tampoco pinta nada: con 5 min de cola vacía el marcador de ocio
+      // del guardián lleva puesto de sobra, así que esta llamada lo suelta de
+      // verdad y el siguiente usuario, esté donde esté, puede hablar ya.
+      this.#guardian.liberarSiOcioso(guildId, true);
+      await this.#abandonarCanal(guildId, `${INACTIVIDAD_VOZ_MS / 60_000} min de inactividad`);
+    }
   }
 
   // Revocar NO es simétrico de autorizar: arrastra la sesión y el audio.
@@ -251,6 +328,7 @@ export class Orquestador {
     } catch (err) {
       this.#log.warn({ err: (err as Error).message }, 'no se pudo desconectar el altavoz al apagar');
     }
+    this.#ultimaActividadVoz.clear();   // ya no queda conexión que vigilar
     this.#log.info({ locucionesAbortadas: pendientes.length },
       'orquestador apagado: síntesis abortada, colas vacías y canales de voz abandonados');
   }
@@ -331,6 +409,7 @@ export class Orquestador {
     // cerró esta fila como 'abortado'. Seguir sería locutar DESPUÉS del corte.
     if (this.#enCurso.get(k) !== l) return false;
     this.#guardian.ocupar(l.guildId, veredicto.canalId);
+    this.#tocarActividadVoz(l.guildId);   // hay conexión y acaba de servir para algo
 
     const señal = this.#señalDe(l.guildId, l.userId);
     let resultado: ResultadoLocucion;
@@ -344,6 +423,9 @@ export class Orquestador {
         msPrimerByte: null, msAudio: 0, caracteresProveedor: null, modeloDevuelto: null,
       };
     }
+    // Locución terminada (sonara o no): el reloj de inactividad de la salida
+    // C arranca DESDE AQUÍ, no desde que se encoló.
+    this.#tocarActividadVoz(l.guildId);
     // Si pararTodo pasó por aquí mientras sonaba, ya cerró la fila: ni se
     // cierra dos veces ni se sigue con el resto de la cola (ya vaciada).
     if (this.#enCurso.get(k) !== l) return false;
@@ -423,6 +505,35 @@ export class Orquestador {
 
   async #cerrarTodas(pendientes: Locucion[]): Promise<void> {
     for (const l of pendientes) await this.#cerrar(l, { estado: 'abortado', costeOrigen: 'estimado' });
+  }
+
+  // ───────────────────────── salida del canal de voz ─────────────────────────
+
+  // Único sitio por el que se sale de UN canal en caliente (el apagado usa
+  // desconectarTodos()). desconectar() es idempotente y sin conexión viva es
+  // un no-op, así que los llamantes no tienen que comprobar nada antes. Si
+  // fallara, se registra y se sigue: el bot mudo dentro de un canal es feo,
+  // pero tumbar el `disable` del usuario o el barrido entero es peor.
+  async #abandonarCanal(guildId: string, motivo: string): Promise<void> {
+    const canalId = this.#altavoz.canalActualId(guildId);
+    this.#ultimaActividadVoz.delete(guildId);
+    try {
+      await this.#altavoz.desconectar(guildId);
+    } catch (err) {
+      this.#log.warn({ err: (err as Error).message, guildId, motivo },
+        'no se pudo abandonar el canal de voz');
+      return;
+    }
+    if (canalId !== null) {
+      this.#log.info({ guildId, canalId, motivo }, 'el bot abandona el canal de voz');
+    }
+  }
+
+  // Reloj de la salida C. Se toca en los dos únicos instantes en que la
+  // conexión de voz de un guild sirve para algo: al entrar al canal y al
+  // terminar (bien o mal) una locución.
+  #tocarActividadVoz(guildId: string): void {
+    this.#ultimaActividadVoz.set(guildId, this.#reloj.ahora());
   }
 
   #cierreDe(l: Locucion, r: ResultadoLocucion): CierreEventoTts {

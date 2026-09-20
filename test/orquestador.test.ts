@@ -221,3 +221,128 @@ test('el cerrojo del guild se libera tras 10 s de silencio: otro usuario en otro
   assert.equal(dobles.eventosCerrados.at(-1)!.estado, 'reproducido');
   assert.equal(servicios.guardian.canalOcupado('g'), 'c2'); // y ahora lo ocupa Bea
 });
+
+// ── Paquete de salida: las tres formas de abandonar el canal EN CALIENTE.
+// Hasta aquí el bot solo salía al apagar, al ser expulsado o al ser mudado de
+// canal (los dos últimos, dentro de Altavoz): se quedaba dentro de un canal
+// vacío indefinidamente, ocupando una conexión de voz y figurando en la lista
+// de miembros como si estuviera escuchando.
+
+// ── A: el usuario con TTS activo se sale del canal.
+
+test('salida A: se va el último con TTS activo → el bot se va detrás y aborta lo que sonaba', async () => {
+  const { orq, dobles } = crearMundo({ locutorLento: true });
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+  assert.equal(dobles.canalActual('g'), 'c1');           // el bot está dentro de c1
+
+  await orq.abandonarCanalSiProcede('g', 'u', 'c1', false);
+  assert.deepEqual(dobles.desconexionesGuild, ['g']);
+  assert.equal(dobles.canalActual('g'), null);
+  assert.equal(dobles.señalesAbortadas, 1);              // lo que estaba sonando se corta
+  assert.equal(dobles.eventosCerrados.at(-1)!.estado, 'abortado');
+  // La SESIÓN sobrevive: si vuelve y escribe, la entrada perezosa del
+  // pipeline mete al bot otra vez sin pasar por /jspeak enable.
+  assert.deepEqual(orq.sesionesActivasDe('g'), ['u']);
+});
+
+test('salida A2: se va uno pero otro con TTS activo sigue en el canal → el bot se queda', async () => {
+  const { orq, dobles, servicios } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await servicios.autorizaciones.autorizar('g', 'u2', 'admin');
+  await orq.activarSesion('g', 'u2');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+
+  await orq.abandonarCanalSiProcede('g', 'u', 'c1', true);
+  assert.deepEqual(dobles.desconexionesGuild, []);
+  assert.equal(dobles.canalActual('g'), 'c1');
+});
+
+test('salida A3: quien no tiene sesión activa no saca al bot del canal al irse', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+
+  await orq.abandonarCanalSiProcede('g', 'u2', 'c1', false);   // u2 nunca activó el TTS
+  assert.deepEqual(dobles.desconexionesGuild, []);
+  assert.equal(dobles.canalActual('g'), 'c1');
+});
+
+test('salida A4: si el bot no estaba en el canal que se deja, no se mueve', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+
+  await orq.abandonarCanalSiProcede('g', 'u', 'c9', false);    // sale de OTRO canal
+  assert.deepEqual(dobles.desconexionesGuild, []);
+  assert.equal(dobles.canalActual('g'), 'c1');
+});
+
+// ── B: /jspeak disable de la última sesión activa del guild.
+
+test('salida B: disable de la última sesión activa → el bot abandona el canal', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+  assert.equal(dobles.canalActual('g'), 'c1');
+
+  await orq.desactivarSesion('g', 'u');
+  assert.deepEqual(dobles.desconexionesGuild, ['g']);
+  assert.equal(dobles.canalActual('g'), null);
+});
+
+test('salida B2: disable con otra sesión activa en el guild → el bot se queda', async () => {
+  const { orq, dobles, servicios } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await servicios.autorizaciones.autorizar('g', 'u2', 'admin');
+  await orq.activarSesion('g', 'u2');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+
+  await orq.desactivarSesion('g', 'u');
+  assert.deepEqual(dobles.desconexionesGuild, []);
+  assert.equal(dobles.canalActual('g'), 'c1');
+  assert.deepEqual(orq.sesionesActivasDe('g'), ['u2']);
+});
+
+// ── C: barrido de inactividad (el TICK vive en main.ts; aquí, solo la política).
+
+test('salida C: 5 min con la cola vacía y sin locutar → el barrido saca al bot del canal', async () => {
+  const { orq, dobles } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Alba habla y el bot entra al canal.' }));
+
+  await orq.barrerInactividad();
+  assert.deepEqual(dobles.desconexionesGuild, []);       // recién locutado: no toca
+
+  dobles.reloj.avanzar(5 * 60_000 + 1);
+  await orq.barrerInactividad();
+  assert.deepEqual(dobles.desconexionesGuild, ['g']);
+  assert.equal(dobles.canalActual('g'), null);
+
+  dobles.reloj.avanzar(5 * 60_000);
+  await orq.barrerInactividad();                         // ya no hay conexión: no insiste
+  assert.deepEqual(dobles.desconexionesGuild, ['g']);
+});
+
+test('salida C2: con algo pendiente en la cola el barrido no toca la conexión', async () => {
+  const { orq, dobles } = crearMundo({ locutorLento: true });
+  await orq.activarSesion('g', 'u');
+  await orq.procesarMensaje(dobles.mensaje({ contenido: 'Frase que se queda sonando para siempre.' }));
+
+  dobles.reloj.avanzar(10 * 60_000);
+  await orq.barrerInactividad();
+  assert.deepEqual(dobles.desconexionesGuild, []);
+  assert.equal(dobles.canalActual('g'), 'c1');
+});
+
+test('sesionesActivasDe: solo los userId con sesión viva de ESE guild', async () => {
+  const { orq, servicios } = crearMundo();
+  await orq.activarSesion('g', 'u');
+  await servicios.autorizaciones.autorizar('g', 'u2', 'admin');
+  await orq.activarSesion('g', 'u2');
+  await orq.activarSesion('g2', 'u3');
+  assert.deepEqual(orq.sesionesActivasDe('g').sort(), ['u', 'u2']);
+  assert.deepEqual(orq.sesionesActivasDe('g2'), ['u3']);
+  await orq.desactivarSesion('g', 'u');
+  assert.deepEqual(orq.sesionesActivasDe('g'), ['u2']);
+});

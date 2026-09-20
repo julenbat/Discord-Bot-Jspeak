@@ -1,6 +1,7 @@
 import {
   ChannelType, Events, MessageFlags, PermissionFlagsBits,
   type Client, type Message, type Interaction, type ChatInputCommandInteraction,
+  type VoiceState,
 } from 'discord.js';
 import { generateDependencyReport } from '@discordjs/voice';
 import type { Altavoz } from '../audio/altavoz.ts';
@@ -36,8 +37,8 @@ export interface DepsDiscord {
   altavoz: Altavoz;
 }
 
-// Composition root de la presentación: crea el Client, registra los cuatro
-// handlers de ESPECIFICACION.md §5/§8 y hace login. Los handlers son FINOS:
+// Composition root de la presentación: crea el Client, registra los handlers
+// de ESPECIFICACION.md §5/§8 y hace login. Los handlers son FINOS:
 // traducen discord.js ↔ Orquestador/ServicioAutorizaciones/ClienteInworld;
 // cero lógica de negocio.
 export async function arrancarDiscord(deps: DepsDiscord): Promise<Client> {
@@ -77,6 +78,13 @@ export async function arrancarDiscord(deps: DepsDiscord): Promise<Client> {
   client.on(Events.InteractionCreate, (interaction) => {
     alRecibirInteraccion(interaction, deps, catalogoVoces).catch((err) => {
       log.error({ err: (err as Error).message, interactionId: interaction.id }, 'fallo procesando interactionCreate');
+    });
+  });
+
+  client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+    alCambiarDeCanalDeVoz(oldState, newState, deps).catch((err) => {
+      log.error({ err: (err as Error).message, guildId: newState.guild.id },
+        'fallo procesando voiceStateUpdate');
     });
   });
 
@@ -201,6 +209,46 @@ async function alRecibirMensaje(message: Message, deps: DepsDiscord): Promise<vo
   };
 
   await deps.orquestador.procesarMensaje(m);
+}
+
+// ───────────────────────── Events.VoiceStateUpdate ─────────────────────────
+
+// Salida A del paquete de salida: el bot no se queda solo en un canal vacío.
+//
+// Handler FINO. Hace tres cosas, todas mecánicas, y ni una decisión:
+//
+//  1. Descarta el ruido. VoiceStateUpdate se dispara TAMBIÉN al mutearse,
+//     ensordecerse, empezar a compartir pantalla, ponerse a emitir vídeo o
+//     que le suban a hablar en un escenario. Sin el filtro de cambio REAL de
+//     canal (`oldState.channelId !== newState.channelId`), cada mute del
+//     usuario sacaría al bot del canal y el siguiente mensaje lo volvería a
+//     meter: reconexiones en bucle, con sus 20 s de `entersState(Ready)` y su
+//     riesgo de rate limit de voz.
+//  2. Descarta bots, el propio incluido: cuando el Altavoz entra o sale del
+//     canal, el gateway devuelve el eco de su propio VoiceState.
+//  3. Resuelve el ÚNICO dato que la capa de aplicación no puede mirar: si
+//     queda algún otro usuario con sesión de TTS activa dentro del canal que
+//     se acaba de dejar. Es un cruce de `orquestador.sesionesActivasDe()` con
+//     el caché vivo de VoiceStates de discord.js, o sea presentación pura.
+//
+// El resto —¿tiene sesión?, ¿estaba el bot en ese canal?, ¿hay que abortar lo
+// que sonaba?, ¿se desconecta?— es política y vive en el orquestador.
+async function alCambiarDeCanalDeVoz(
+  oldState: VoiceState, newState: VoiceState, deps: DepsDiscord,
+): Promise<void> {
+  if (oldState.channelId === newState.channelId) return;   // mute/deaf/stream/vídeo: no se ha movido
+  const miembro = newState.member ?? oldState.member;
+  if (miembro === null || miembro.user.bot) return;
+  const guild = newState.guild;
+  if (!deps.config.guildAllowlist.includes(guild.id)) return;
+
+  const userId = miembro.id;
+  const canalAnteriorId = oldState.channelId;
+  const quedanActivosEnElCanal = deps.orquestador.sesionesActivasDe(guild.id)
+    .some((otro) => otro !== userId && guild.voiceStates.cache.get(otro)?.channelId === canalAnteriorId);
+
+  await deps.orquestador.abandonarCanalSiProcede(
+    guild.id, userId, canalAnteriorId, quedanActivosEnElCanal);
 }
 
 // ───────────────────────── Events.InteractionCreate ─────────────────────────
