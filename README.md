@@ -294,6 +294,11 @@ Si seguiría siendo cierta aunque el producto cambiara, va al README.
       TTFB 276 ms, catálogo de voces OK → sin ffmpeg, sin resampleo.
 - [x] Planes de implementación en `docs/superpowers/plans/` (3 planes: fundación y persistencia,
       motor de audio, comportamiento del bot), escritos sobre `ESPECIFICACION.md`.
-- [ ] Cerrar las preguntas abiertas de `ESPECIFICACION.md` §6 (**lo decide el autor**; los planes
-      asumen las recomendaciones y marcan dónde tocaría cambiar).
-- [ ] Ejecutar los planes, en orden.
+- [x] Los 3 planes ejecutados (21 tareas, desarrollo por subagentes con revisión por tarea) +
+      revisión final de rama con oleada de fixes. Suite: 72/72 en verde; `tsc --noEmit` limpio.
+      Rama `worktree-bot-tts`.
+- [ ] Humo real contra Discord (checklist de 19 puntos del plan 3, Task 8): **pendiente de
+      `DISCORD_TOKEN` y `DISCORD_APP_ID`** en el `.env`. Inworld ya validado en real (34 voces).
+- [ ] Cerrar la pregunta 3 de `ESPECIFICACION.md` §6 (presupuesto) — el resto de supuestos van
+      adoptados con las recomendaciones.
+- [ ] Merge a `master` (**lo decide el autor** tras el humo).
